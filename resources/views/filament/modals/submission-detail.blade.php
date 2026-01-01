@@ -335,6 +335,11 @@
                     </div>
                 @endif
             </div>
+
+            <!-- Add separator after each field except the last one -->
+            @if (!$loop->last)
+                <hr style="border-color: #e5e7eb; margin: 1rem 0;">
+            @endif
         @endforeach
     </div>
 </div>
