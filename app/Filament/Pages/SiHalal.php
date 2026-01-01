@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Jobs\JotformSyncJob;
 use App\Models\JotformSync;
 use App\Models\SiHalal as ModelsSiHalal;
 use BackedEnum;
@@ -21,6 +22,7 @@ use Filament\Tables\Table;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\HtmlString;
 use UnitEnum;
 
@@ -45,6 +47,9 @@ class SiHalal extends Page implements HasForms, HasTable
 
     protected ?ModelsSiHalal $record = null;
 
+    // Store custom table search value
+    public ?string $customTableSearch = null;
+
     public function mount(): void
     {
         $this->record = ModelsSiHalal::query()
@@ -55,6 +60,27 @@ class SiHalal extends Page implements HasForms, HasTable
             $this->form->fill($this->record->toArray());
         } else {
             $this->form->fill();
+        }
+    }
+
+    public function updating($name, $value): void
+    {
+        // Capture table search updates from Livewire
+        if ($name === 'tableSearch') {
+            \Log::info('Updating Search', [
+                'name' => $name,
+                'value' => $value,
+                'empty' => empty($value),
+                'is_null' => is_null($value),
+                'old_property' => $this->customTableSearch
+            ]);
+
+            // Reset to null if empty, otherwise set the value
+            $this->customTableSearch = !empty($value) ? $value : null;
+
+            \Log::info('Updated Search Property', [
+                'new_property' => $this->customTableSearch
+            ]);
         }
     }
 
@@ -91,7 +117,8 @@ class SiHalal extends Page implements HasForms, HasTable
                     ]),
 
                 Action::make('save')
-                    ->label('💾 Simpan Pengaturan'),
+                    ->label('💾 Simpan Pengaturan')
+                    ->action('save'),
 
                 Section::make()
                     ->schema([]),
@@ -109,6 +136,10 @@ class SiHalal extends Page implements HasForms, HasTable
             $this->record = ModelsSiHalal::create($data);
         }
 
+        // Refresh form with latest data from database
+        $this->record->refresh();
+        $this->form->fill($this->record->toArray());
+
         Notification::make()
             ->title('Konfigurasi berhasil disimpan')
             ->success()
@@ -117,9 +148,45 @@ class SiHalal extends Page implements HasForms, HasTable
 
     public function table(Table $table): Table
     {
+        // Always get the current search value from request
+        $components = request()->input('components', []);
+        $currentSearch = null;
+
+        foreach ($components as $component) {
+            if (isset($component['updates']['tableSearch'])) {
+                $searchValue = $component['updates']['tableSearch'];
+                $currentSearch = !empty($searchValue) ? $searchValue : null;
+                break;
+            }
+        }
+
+        \Log::info('Table Search', [
+            'property' => $this->customTableSearch,
+            'current_search' => $currentSearch,
+            'using' => $currentSearch ?? $this->customTableSearch,
+            'empty' => empty($currentSearch ?? $this->customTableSearch)
+        ]);
+
         return $table
             ->heading('Data Sinkronisasi JotForm')
-            ->query(JotformSync::query())
+            ->query(
+                JotformSync::query()->when(
+                    !empty($currentSearch ?? $this->customTableSearch),
+                    function ($query) use ($currentSearch) {
+                        $searchValue = $currentSearch ?? $this->customTableSearch;
+
+                        // Search in dedicated columns (more efficient) and payload
+                        $query->where(function ($q) use ($searchValue) {
+                            $q->where('nama_lengkap', 'like', "%{$searchValue}%")
+                                ->orWhere('email', 'like', "%{$searchValue}%")
+                                ->orWhere('nama_sppg', 'like', "%{$searchValue}%")
+                                ->orWhere('status_submit', 'like', "%{$searchValue}%")
+                                // Also search in payload for other fields
+                                ->orWhereRaw('CAST(payload AS CHAR) LIKE ?', ["%{$searchValue}%"]);
+                        });
+                    }
+                )
+            )
             ->emptyStateHeading('Belum Ada Data Sinkronisasi')
             ->emptyStateDescription(
                 'Klik tombol "Sinkronisasi" untuk mengambil data dari JotForm.'
@@ -127,44 +194,69 @@ class SiHalal extends Page implements HasForms, HasTable
             ->emptyStateIcon('heroicon-o-arrow-path')
             ->headerActions([
                 Action::make('sync')
-                    ->label('🔄 Sinkronisasi Data')
-                    ->action(fn() => $this->syncJotformData()),
+                    ->label(function () {
+                        $isSyncing = cache()->get('jotform_sync_running', false);
+                        return $isSyncing ? '⏳ Sedang Mensinkronisasi...' : '🔄 Sinkronisasi Data';
+                    })
+                    ->action(fn() => $this->syncJotformData())
+                    ->color('primary')
+                    ->disabled(fn() => cache()->get('jotform_sync_running', false)),
             ])
-            ->searchable()
+            ->poll('5s') // Auto refresh table every 5 seconds
             ->columns([
                 TextColumn::make('nama_lengkap')
                     ->label('Nama Lengkap')
-                    ->sortable()
-                    ->searchable(),
+                    ->sortable(),
 
                 TextColumn::make('email')
                     ->label('Email')
-                    ->sortable()
-                    ->searchable(),
+                    ->sortable(),
 
                 TextColumn::make('nama_sppg')
-                    ->label('Nama SPPG'),
+                    ->label('Nama SPPG')
+                    ->sortable(),
 
                 TextColumn::make('alamat_sppg')
-                    ->label('Alamat SPPG')
-                    ->wrap(),
+                    ->label('Alamat SPPG'),
 
                 TextColumn::make('status_submit')
                     ->label('Status Submit')
                     ->badge(),
 
-                TextColumn::make('synced_at')
+                TextColumn::make('created_at')
                     ->label('Tanggal Sync')
                     ->dateTime('d M Y H:i')
                     ->sortable(),
+            ])
+            ->searchable()
+            ->recordActions([
+                Action::make('view_detail')
+                    ->label('Lihat Detail')
+                    ->icon('heroicon-o-eye')
+                    ->modalHeading('Detail Submission')
+                    ->modalContent(function ($record) {
+                        return view('filament.modals.submission-detail', ['record' => $record]);
+                    })
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('Tutup'),
             ]);
     }
 
     protected function syncJotformData(): void
     {
+        // Set sync status to running
+        cache()->put('jotform_sync_running', true, now()->addMinutes(10));
+
+        // Dispatch job to handle sync in background
+        dispatch(new JotformSyncJob(auth()->id()));
+
         Notification::make()
-            ->title('Sinkronisasi berhasil dijalankan')
-            ->success()
+            ->title('Sinkronisasi sedang diproses')
+            ->body('Data sedang disinkronisasi di latar belakang. Table akan otomatis terupdate.')
+            ->info()
             ->send();
+
+        // Refresh the table to show loading state
+        $this->dispatch('refresh-table');
     }
 }
