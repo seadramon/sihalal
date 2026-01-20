@@ -63,13 +63,6 @@ class JotFormService
                     return ($submission['status'] ?? 'ACTIVE') !== 'DELETED';
                 });
 
-                // dd([
-                //     'response_data' => $data,
-                //     'submissions_count' => count($submissions),
-                //     'filtered_count' => count($filtered),
-                //     'first_submission' => $submissions[0] ?? null,
-                // ]);
-
                 return $filtered;
             }
 
@@ -214,6 +207,12 @@ class JotFormService
             ],
         ];
 
+        // Default JSON data structure
+        $defaultJsonData = [
+            'status' => 'new',
+            'notes' => [],
+        ];
+
         return [
             'form_id' => $submission['form_id'],
             'submission_id' => $submission['id'],
@@ -222,6 +221,12 @@ class JotFormService
             'nama_lengkap' => $namaLengkap,
             'email' => $email,
             'nama_sppg' => $namaSppg,
+            'data_pengajuan' => $defaultJsonData,
+            'komitmen_tanggung_jawab' => $defaultJsonData,
+            'bahan' => $defaultJsonData,
+            'proses' => $defaultJsonData,
+            'produk' => $defaultJsonData,
+            'pemantauan_evaluasi' => $defaultJsonData,
         ];
     }
 

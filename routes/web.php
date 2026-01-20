@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\JotFormController;
+use App\Http\Controllers\SubmitToSiHalalController;
 
 Route::get('/', function () {
     return view('welcome');
@@ -24,3 +25,6 @@ Route::prefix('jotform')->group(function () {
     // Web endpoint untuk sync dari browser
     Route::get('/sync', [JotFormController::class, 'syncWeb']);
 });
+
+// Submit to SiHalal Route
+Route::get('/submit-to-sihalal/{id}', SubmitToSiHalalController::class)->name('submit-to-sihalal');
