@@ -1,24 +1,21 @@
-# Use official PHP 8.2 image with Apache
-FROM php:8.2-apache
+FROM php:8.3-fpm
 
-# Set working directory
-WORKDIR /var/www/html
-
-# Install system dependencies
+# 1. Install system dependencies & library untuk ekstensi PHP
 RUN apt-get update && apt-get install -y \
     git \
+    unzip \
     curl \
     libpng-dev \
+    libjpeg-dev \
+    libfreetype6-dev \
+    libzip-dev \
     libonig-dev \
     libxml2-dev \
-    libzip-dev \
+    libicu-dev \
     zip \
-    unzip \
-    nodejs \
-    npm \
     && rm -rf /var/lib/apt/lists/*
 
-# Install PHP extensions
+# 2. Install & Configure PHP extensions
 RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install -j$(nproc) \
     pdo \
@@ -29,31 +26,41 @@ RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
     bcmath \
     gd \
     zip \
+    intl \
     opcache
 
-# Enable Apache modules
-RUN a2enmod rewrite
-
-# Install Composer
+# 3. Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# Copy application files
-COPY . .
+# 4. Set Environment Variables
+ENV COMPOSER_ALLOW_SUPERUSER=1
+WORKDIR /var/www
 
-# Set permissions
-RUN chown -R www-data:www-data /var/www/html \
-    && chmod -R 755 /var/www/html/storage \
-    && chmod -R 755 /var/www/html/bootstrap/cache
+# 5. Copy composer files dulu (Optimasi Layer Cache)
+COPY composer.json composer.lock ./
 
-# Install PHP dependencies
-RUN composer install --no-dev --optimize-autoloader --no-interaction
+# 6. Install Dependencies
+# Kita gunakan --ignore-platform-reqs untuk menghindari error jika 
+# ada library yang minta ekstensi aneh saat build
+RUN composer install \
+    --no-interaction \
+    --no-plugins \
+    --no-scripts \
+    --prefer-dist \
+    --ignore-platform-reqs
 
-# Install and build npm dependencies
-RUN npm install \
-    && npm run build
+# 7. Copy seluruh source code
+COPY . /var/www
 
-# Expose port 80
-EXPOSE 80
+# 8. Atur Permissions
+# Laravel butuh akses tulis ke storage dan bootstrap/cache
+RUN chown -R www-data:www-data /var/www \
+    && chmod -R 775 /var/www/storage \
+    && chmod -R 775 /var/www/bootstrap/cache
 
-# Apache will run in foreground
-CMD ["apache2-foreground"]
+# 9. Finalisasi Autoload
+RUN composer dump-autoload --optimize
+
+EXPOSE 9000
+
+CMD ["php-fpm"]
